@@ -1,0 +1,235 @@
+# Scan, sign, and release a skrpt package on version tag push.
+#
+# Pipeline: tag push → checkout → download CLI → structural scan → fetch JS scanner → security scan → write security block → sign → zip → release → POST report
+#
+# Structural validation: CLI (skrptiq scan) — engine's own validator, single source of truth
+# Content-quality scan: JS scanner — hardcoded secrets, PII, compliance, permissions
+#
+# Requires org-level secrets:
+#   SIGNING_PRIVATE_KEY  — Ed25519 PEM for signing
+#   SCANNER_API_KEY      — API key for posting security reports to Hub
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Extract version and slug
+        id: meta
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "slug=$(basename "$GITHUB_REPOSITORY")" >> "$GITHUB_OUTPUT"
+
+      # Pin CLI version — update when engine validation rules change
+      - name: Download CLI (structural validation)
+        run: |
+          curl -sL https://github.com/skrptiq/skrptiq-cli/releases/download/v0.0.6/skrptiq-linux-amd64 -o /usr/local/bin/skrptiq
+          chmod +x /usr/local/bin/skrptiq
+          echo "Using CLI $(skrptiq --version 2>&1 || echo 'v0.0.6')"
+
+      - name: Structural validation (CLI)
+        run: |
+          skrptiq scan . 2>&1
+          echo "Structural validation passed"
+
+      - name: Fetch content-quality scanner from Hub repo
+        env:
+          SCANNER_REPO_TOKEN: ${{ secrets.SCANNER_REPO_TOKEN }}
+        run: |
+          curl -sf \
+            -H "Authorization: Bearer ${SCANNER_REPO_TOKEN}" \
+            -H "Accept: application/vnd.github.raw+json" \
+            "https://api.github.com/repos/skrptiq/skrptiq-hub/contents/scripts/scanning/scan-skrpt.mjs?ref=main" \
+            -o /tmp/scan-skrpt.mjs
+          echo "Fetched content-quality scanner"
+
+      - name: Content-quality scan (JS scanner — security pass)
+        id: scan
+        run: |
+          # Run the JS scanner for security/content-quality checks
+          node /tmp/scan-skrpt.mjs . --json > /tmp/scan-result.json 2>&1 || true
+
+          # Display security results
+          node -e '
+          const r = JSON.parse(require("fs").readFileSync("/tmp/scan-result.json","utf-8"));
+          const secStatus = r.summary?.undeclared?.length > 0 ? "WARN" : r.findings?.some(f => f.severity === "fail") ? "FAIL" : "PASS";
+          console.log("Security: " + secStatus);
+          if (r.summary?.undeclared) r.summary.undeclared.forEach(u => console.log("  " + u));
+          if (r.summary?.warnings) r.summary.warnings.forEach(w => console.log("  " + w));
+          console.log("Overall: " + r.slug + " — " + r.status.toUpperCase());
+          if (r.status === "fail") {
+            if (r.summary?.warnings) r.summary.warnings.forEach(w => console.log("::error::" + w));
+            process.exit(1);
+          }
+          '
+
+          STATUS=$(node -e "console.log(JSON.parse(require('fs').readFileSync('/tmp/scan-result.json','utf-8')).status)")
+          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+
+      - name: Write security block into manifest
+        run: |
+          node -e '
+          const { readFileSync, writeFileSync } = require("node:fs");
+          const scan = JSON.parse(readFileSync("/tmp/scan-result.json", "utf-8"));
+          const now = new Date().toISOString();
+          let manifest = readFileSync("skrptiq.yaml", "utf-8");
+          manifest = manifest.replace(/\n*security:[\s\S]*?(?=\n[a-z]|\n*$)/, "").trimEnd() + "\n";
+          let sec = "\nsecurity:\n";
+          sec += "  status: \"" + scan.status + "\"\n";
+          sec += "  scanned_at: \"" + now + "\"\n";
+          sec += "  scanner_version: \"" + scan.scanner_version + "\"\n";
+          sec += "  syntactic: \"" + scan.summary.syntactic.status + "\"\n";
+          sec += "  structural: \"" + scan.summary.structural.status + "\"\n";
+          sec += "  detected:\n";
+          sec += "    services: [" + (scan.summary.detected.services||[]).map(s=>"\""+s+"\"").join(", ") + "]\n";
+          sec += "    permissions: [" + (scan.summary.detected.permissions||[]).map(s=>"\""+s+"\"").join(", ") + "]\n";
+          sec += "    data_handling: [" + (scan.summary.detected.data_handling||[]).map(s=>"\""+s+"\"").join(", ") + "]\n";
+          sec += "  undeclared: [" + (scan.summary.undeclared||[]).map(s=>"\""+s+"\"").join(", ") + "]\n";
+          sec += "  warnings: [" + (scan.summary.warnings||[]).map(s=>"\""+s.replace(/"/g,"\\\"")+"\"").join(", ") + "]\n";
+          sec += "  report_url: \"https://hub.skrptiq.ai/skrpts/" + scan.slug + "/security\"\n";
+          writeFileSync("skrptiq.yaml", manifest + sec);
+          console.log("Security block written: " + scan.status);
+          '
+
+      - name: Sign the skrpt
+        env:
+          SIGNING_PRIVATE_KEY: ${{ secrets.SIGNING_PRIVATE_KEY }}
+        run: |
+          echo "$SIGNING_PRIVATE_KEY" > /tmp/signing.key
+          node -e '
+          const { createHash, sign, createPrivateKey } = require("node:crypto");
+          const { readFileSync, writeFileSync, readdirSync } = require("node:fs");
+          const { join, relative } = require("node:path");
+          const dir = ".";
+          const keyPem = readFileSync("/tmp/signing.key", "utf-8");
+          const privateKey = createPrivateKey(keyPem);
+          const tier = "official";
+          function collectFiles(d, base) {
+            base = base || d; const entries = readdirSync(d, { withFileTypes: true }); const files = [];
+            for (const e of entries) { const fp = join(d, e.name); if (e.name.startsWith(".") || e.name === "node_modules") continue; if (e.isDirectory()) files.push(...collectFiles(fp, base)); else if (e.isFile()) files.push(relative(base, fp)); }
+            return files;
+          }
+          const allFiles = collectFiles(dir);
+          const nonManifest = allFiles.filter(f => f !== "skrptiq.yaml");
+          const manifest = readFileSync(join(dir, "skrptiq.yaml"), "utf-8");
+          const clean = manifest
+            .replace(/\n*integrity:[\s\S]*?(?=\n[a-z]|\n*$)/, "")
+            .replace(/\n*trust:[\s\S]*?(?=\n[a-z]|\n*$)/, "")
+            .trimEnd() + "\n";
+          const hash = createHash("sha256");
+          hash.update("skrptiq.yaml"); hash.update(clean);
+          for (const f of [...nonManifest].sort()) { hash.update(f.split(/[\\/]/).join("/")); hash.update(readFileSync(join(dir, f))); }
+          const checksum = hash.digest("hex");
+          const sig = sign(null, Buffer.from(checksum), privateKey).toString("base64");
+          const now = new Date().toISOString();
+          let out = clean.trimEnd() + "\n";
+          out += "\nintegrity:\n";
+          out += "  checksum: \"sha256:" + checksum + "\"\n";
+          out += "  signature: \"ed25519:" + sig + "\"\n";
+          out += "  signed_at: \"" + now + "\"\n";
+          out += "  signed_by: \"hub.skrptiq.ai\"\n";
+          out += "\ntrust:\n";
+          out += "  tier: \"" + tier + "\"\n";
+          out += "  reviewed: true\n";
+          out += "  reviewed_at: \"" + now + "\"\n";
+          writeFileSync(join(dir, "skrptiq.yaml"), out);
+          console.log("Signed: sha256:" + checksum.slice(0, 16) + "...");
+          '
+          rm /tmp/signing.key
+
+      - name: Create release zip
+        run: |
+          SLUG="${{ steps.meta.outputs.slug }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+          ZIP_NAME="${SLUG}-v${VERSION}.zip"
+          zip -r "$ZIP_NAME" . -x ".git/*" ".github/*"
+          echo "zip_name=${ZIP_NAME}" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ steps.meta.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: ${{ env.zip_name }}
+
+      - name: Post security report to Hub API
+        if: always() && steps.scan.outcome == 'success'
+        env:
+          SCANNER_API_KEY: ${{ secrets.SCANNER_API_KEY }}
+          HUB_API_URL: https://hub.skrptiq.ai
+        run: |
+          SLUG="${{ steps.meta.outputs.slug }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+
+          # Look up skrpt UUID from Hub
+          SKRPT_DATA=$(curl -sf "${HUB_API_URL}/api/skrpts/${SLUG}" 2>/dev/null || echo '{}')
+          SKRPT_ID=$(echo "$SKRPT_DATA" | node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf-8'));console.log(d.skrpt?.id||'')}catch{console.log('')}")
+
+          if [ -z "$SKRPT_ID" ]; then
+            echo "::warning::Could not look up skrpt ID from Hub — skipping report submission"
+            exit 0
+          fi
+
+          # Build and POST report
+          PAYLOAD=$(node -e "
+            const s=JSON.parse(require('fs').readFileSync('/tmp/scan-result.json','utf-8'));
+            console.log(JSON.stringify({version:'${VERSION}',status:s.status,scanner_version:s.scanner_version,summary:s.summary,findings:s.findings}));
+          ")
+
+          HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
+            -X POST "${HUB_API_URL}/api/skrpts/by-id/${SKRPT_ID}/security" \
+            -H "Content-Type: application/json" \
+            -H "x-scanner-api-key: ${SCANNER_API_KEY}" \
+            -d "$PAYLOAD" 2>/dev/null || echo "000")
+
+          if [ "$HTTP_CODE" = "201" ]; then echo "Security report submitted (HTTP 201)"
+          elif [ "$HTTP_CODE" = "409" ]; then echo "Report already exists (HTTP 409)"
+          else echo "::warning::Failed to submit report (HTTP ${HTTP_CODE})"; fi
+
+      - name: Register version with Hub API
+        if: always() && steps.scan.outcome == 'success'
+        env:
+          SCANNER_API_KEY: ${{ secrets.SCANNER_API_KEY }}
+          HUB_API_URL: https://hub.skrptiq.ai
+        run: |
+          SLUG="${{ steps.meta.outputs.slug }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+
+          # Look up skrpt UUID from Hub
+          SKRPT_DATA=$(curl -sf "${HUB_API_URL}/api/skrpts/${SLUG}" 2>/dev/null || echo '{}')
+          SKRPT_ID=$(echo "$SKRPT_DATA" | node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf-8'));console.log(d.skrpt?.id||'')}catch{console.log('')}")
+
+          if [ -z "$SKRPT_ID" ]; then
+            echo "::warning::Could not look up skrpt ID — skipping version registration"
+            exit 0
+          fi
+
+          PAYLOAD=$(node -e "console.log(JSON.stringify({version:'${VERSION}',git_commit:'${GITHUB_SHA}',release_notes:'Automated release v${VERSION}'}))")
+
+          HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
+            -X POST "${HUB_API_URL}/api/skrpts/by-id/${SKRPT_ID}/versions" \
+            -H "Content-Type: application/json" \
+            -H "x-scanner-api-key: ${SCANNER_API_KEY}" \
+            -d "$PAYLOAD" 2>/dev/null || echo "000")
+
+          if [ "$HTTP_CODE" = "201" ]; then echo "Version registered (HTTP 201)"
+          elif [ "$HTTP_CODE" = "409" ]; then echo "Version already exists (HTTP 409)"
+          else echo "::warning::Failed to register version (HTTP ${HTTP_CODE})"; fi

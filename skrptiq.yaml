@@ -1,0 +1,41 @@
+# --- Identity ---
+name: "ai-project-orchestrator"
+display_name: "AI Project Orchestrator"
+description: "Multi-agent coordination workflow: structured push reviews, cross-repo drift detection, briefing generation, and a 3-way review loop (Architect → CTO → Orchestrator)"
+version: "1.0.0"
+engine: ">=1.0.0"
+
+# --- Attribution ---
+author:
+  name: "skrptiq"
+  url: "https://hub.skrptiq.ai"
+
+licence: "MIT"
+
+# --- Discovery (Hub) ---
+category: "developer"
+tags:
+  - "orchestration"
+  - "multi-agent"
+  - "code-review"
+  - "project-management"
+
+# --- Security & Access ---
+requires:
+  services:
+    - "llm-service"
+  permissions:
+    - "shell:execute"
+  data_handling:
+    - "source-code"
+
+# --- Contents ---
+contents:
+  skills: 7
+  prompts: 7
+  workflows: 1
+  services: 1
+  sources: 2
+  documents: 2
+  assets: 2
+  total: 22

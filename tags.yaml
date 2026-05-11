@@ -1,0 +1,15 @@
+- id: "orchestration"
+  title: "Orchestration"
+  description: "Multi-agent coordination and project management"
+
+- id: "multi-agent"
+  title: "Multi-Agent"
+  description: "Workflows that coordinate multiple AI agents"
+
+- id: "code-review"
+  title: "Code Review"
+  description: "Automated code review and analysis"
+
+- id: "project-management"
+  title: "Project Management"
+  description: "Project coordination and tracking"
