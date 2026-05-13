@@ -45,8 +45,14 @@ jobs:
           echo "Using CLI $(skrptiq --version 2>&1 || echo 'v0.0.6')"
 
       - name: Structural validation (CLI)
+        # First-party publish policy: any engine finding blocks — errors and warnings alike.
         run: |
-          skrptiq scan . 2>&1
+          SCAN_OUTPUT=$(skrptiq scan . 2>&1)
+          echo "$SCAN_OUTPUT"
+          if echo "$SCAN_OUTPUT" | grep -qE "(ERROR|WARNING)"; then
+            echo "::error::Structural validation failed — first-party publish requires zero findings (errors AND warnings)"
+            exit 1
+          fi
           echo "Structural validation passed"
 
       - name: Fetch content-quality scanner from Hub repo
