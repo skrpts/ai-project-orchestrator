@@ -37,12 +37,16 @@ jobs:
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           echo "slug=$(basename "$GITHUB_REPOSITORY")" >> "$GITHUB_OUTPUT"
 
-      # Pin CLI version — update when engine validation rules change
+      # Always use the latest CLI release — no version pin.
+      # Engine validation rules change frequently; a stale binary
+      # means the per-skrpt CI gate silently passes broken content.
       - name: Download CLI (structural validation)
         run: |
-          curl -sL https://github.com/skrptiq/skrptiq-cli/releases/download/v0.0.6/skrptiq-linux-amd64 -o /usr/local/bin/skrptiq
+          LATEST_URL=$(curl -sfL -o /dev/null -w '%{url_effective}' https://github.com/skrptiq/skrptiq-cli/releases/latest)
+          LATEST_TAG=$(basename "$LATEST_URL")
+          curl -sfL "https://github.com/skrptiq/skrptiq-cli/releases/download/${LATEST_TAG}/skrptiq-linux-amd64" -o /usr/local/bin/skrptiq
           chmod +x /usr/local/bin/skrptiq
-          echo "Using CLI $(skrptiq --version 2>&1 || echo 'v0.0.6')"
+          echo "Using CLI ${LATEST_TAG}"
 
       - name: Structural validation (CLI)
         # First-party publish policy: any engine finding blocks — errors and warnings alike.
@@ -228,7 +232,14 @@ jobs:
             exit 0
           fi
 
-          PAYLOAD=$(node -e "console.log(JSON.stringify({version:'${VERSION}',git_commit:'${GITHUB_SHA}',release_notes:'Automated release v${VERSION}'}))")
+          # Extract content hash from the signed manifest's integrity block
+          CONTENT_HASH=$(node -e "
+            const m = require('fs').readFileSync('skrptiq.yaml','utf-8');
+            const match = m.match(/checksum:\\s*\"sha256:([a-f0-9]+)\"/);
+            console.log(match ? match[1] : '');
+          ")
+
+          PAYLOAD=$(node -e "console.log(JSON.stringify({version:'${VERSION}',git_commit:'${GITHUB_SHA}',release_notes:'Automated release v${VERSION}',content_hash:'${CONTENT_HASH}'}))")
 
           HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
             -X POST "${HUB_API_URL}/api/skrpts/by-id/${SKRPT_ID}/versions" \

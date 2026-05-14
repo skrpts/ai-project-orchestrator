@@ -2,8 +2,8 @@
 name: "ai-project-orchestrator"
 display_name: "AI Project Orchestrator"
 description: "Multi-agent coordination workflow: structured push reviews, cross-repo drift detection, briefing generation, and a 3-way review loop (Architect → CTO → Orchestrator)"
-version: "1.0.0"
-engine: ">=1.0.0"
+version: "1.0.1"
+engine: ">=0.1.0"
 
 # --- Attribution ---
 author:
