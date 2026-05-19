@@ -164,6 +164,43 @@ jobs:
           '
           rm /tmp/signing.key
 
+      - name: Extract release notes
+        id: notes
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          if [ -f RELEASE_NOTES.md ]; then
+            NOTES=$(node -e "
+              const fs = require('fs');
+              const content = fs.readFileSync('RELEASE_NOTES.md', 'utf-8');
+              const version = '${VERSION}'.replace(/\./g, '\\\\.');
+              const re = new RegExp('## v' + version + '\\\\s*\\\\n([\\\\s\\\\S]*?)(?=\\\\n## v|$)');
+              const m = content.match(re);
+              console.log(m ? m[1].trim() : '');
+            ")
+          else
+            NOTES=""
+          fi
+          echo "$NOTES" > /tmp/release-notes.txt
+          if [ -n "$NOTES" ]; then
+            echo "has_notes=true" >> "$GITHUB_OUTPUT"
+            echo "Release notes found for v${VERSION}"
+          else
+            echo "has_notes=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No release notes found for v${VERSION}"
+          fi
+
+      - name: Enforce release notes for major/minor
+        if: steps.notes.outputs.has_notes == 'false'
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          PATCH=$(echo "$VERSION" | cut -d. -f3)
+          if [ "$PATCH" = "0" ]; then
+            echo "::error::Release notes required for major/minor version v${VERSION}. Add a ## v${VERSION} section to RELEASE_NOTES.md"
+            exit 1
+          else
+            echo "::warning::No release notes for patch v${VERSION} — continuing with placeholder"
+          fi
+
       - name: Create release zip
         run: |
           SLUG="${{ steps.meta.outputs.slug }}"
@@ -214,43 +251,6 @@ jobs:
           if [ "$HTTP_CODE" = "201" ]; then echo "Security report submitted (HTTP 201)"
           elif [ "$HTTP_CODE" = "409" ]; then echo "Report already exists (HTTP 409)"
           else echo "::warning::Failed to submit report (HTTP ${HTTP_CODE})"; fi
-
-      - name: Extract release notes
-        id: notes
-        run: |
-          VERSION="${{ steps.meta.outputs.version }}"
-          if [ -f RELEASE_NOTES.md ]; then
-            NOTES=$(node -e "
-              const fs = require('fs');
-              const content = fs.readFileSync('RELEASE_NOTES.md', 'utf-8');
-              const version = '${VERSION}'.replace(/\./g, '\\\\.');
-              const re = new RegExp('## v' + version + '\\\\s*\\\\n([\\\\s\\\\S]*?)(?=\\\\n## v|$)');
-              const m = content.match(re);
-              console.log(m ? m[1].trim() : '');
-            ")
-          else
-            NOTES=""
-          fi
-          echo "$NOTES" > /tmp/release-notes.txt
-          if [ -n "$NOTES" ]; then
-            echo "has_notes=true" >> "$GITHUB_OUTPUT"
-            echo "Release notes found for v${VERSION}"
-          else
-            echo "has_notes=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::No release notes found for v${VERSION}"
-          fi
-
-      - name: Enforce release notes for major/minor
-        if: steps.notes.outputs.has_notes == 'false'
-        run: |
-          VERSION="${{ steps.meta.outputs.version }}"
-          PATCH=$(echo "$VERSION" | cut -d. -f3)
-          if [ "$PATCH" = "0" ]; then
-            echo "::error::Release notes required for major/minor version v${VERSION}. Add a ## v${VERSION} section to RELEASE_NOTES.md"
-            exit 1
-          else
-            echo "::warning::No release notes for patch v${VERSION} — continuing with placeholder"
-          fi
 
       - name: Register version with Hub API
         if: always() && steps.scan.outcome == 'success'
