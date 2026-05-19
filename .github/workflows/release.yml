@@ -133,7 +133,7 @@ jobs:
           const tier = "official";
           function collectFiles(d, base) {
             base = base || d; const entries = readdirSync(d, { withFileTypes: true }); const files = [];
-            for (const e of entries) { const fp = join(d, e.name); if (e.name.startsWith(".") || e.name === "node_modules" || e.name === "RELEASE_NOTES.md") continue; if (e.isDirectory()) files.push(...collectFiles(fp, base)); else if (e.isFile()) files.push(relative(base, fp)); }
+            for (const e of entries) { const fp = join(d, e.name); if (e.name.startsWith(".") || e.name === "node_modules") continue; if (e.isDirectory()) files.push(...collectFiles(fp, base)); else if (e.isFile()) files.push(relative(base, fp)); }
             return files;
           }
           const allFiles = collectFiles(dir);
