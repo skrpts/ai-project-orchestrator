@@ -118,51 +118,14 @@ jobs:
           console.log("Security block written: " + scan.status);
           '
 
-      - name: Sign the skrpt
+      - name: Sign bundle
+        # Per BUNDLE-INTEGRITY-CONTRACT v1.0.3 §4.3-§4.4:
+        # Single canonical invocation. No inline signing logic.
+        # Engine's SignBundle handles file collection, manifest strip,
+        # checksum, signature payload, and manifest update.
         env:
-          SIGNING_PRIVATE_KEY: ${{ secrets.SIGNING_PRIVATE_KEY }}
-        run: |
-          echo "$SIGNING_PRIVATE_KEY" > /tmp/signing.key
-          node -e '
-          const { createHash, sign, createPrivateKey } = require("node:crypto");
-          const { readFileSync, writeFileSync, readdirSync } = require("node:fs");
-          const { join, relative } = require("node:path");
-          const dir = ".";
-          const keyPem = readFileSync("/tmp/signing.key", "utf-8");
-          const privateKey = createPrivateKey(keyPem);
-          const tier = "official";
-          function collectFiles(d, base) {
-            base = base || d; const entries = readdirSync(d, { withFileTypes: true }); const files = [];
-            for (const e of entries) { const fp = join(d, e.name); if (e.name.startsWith(".") || e.name === "node_modules") continue; if (e.isDirectory()) files.push(...collectFiles(fp, base)); else if (e.isFile()) files.push(relative(base, fp)); }
-            return files;
-          }
-          const allFiles = collectFiles(dir);
-          const nonManifest = allFiles.filter(f => f !== "skrptiq.yaml");
-          const manifest = readFileSync(join(dir, "skrptiq.yaml"), "utf-8");
-          const clean = manifest
-            .replace(/\n*integrity:[\s\S]*?(?=\n[a-z]|\n*$)/, "")
-            .replace(/\n*trust:[\s\S]*?(?=\n[a-z]|\n*$)/, "")
-            .trimEnd() + "\n";
-          const hash = createHash("sha256");
-          hash.update("skrptiq.yaml"); hash.update(clean);
-          for (const f of [...nonManifest].sort()) { hash.update(f.split(/[\\/]/).join("/")); hash.update(readFileSync(join(dir, f))); }
-          const checksum = hash.digest("hex");
-          const sig = sign(null, Buffer.from(checksum), privateKey).toString("base64");
-          const now = new Date().toISOString();
-          let out = clean.trimEnd() + "\n";
-          out += "\nintegrity:\n";
-          out += "  checksum: \"sha256:" + checksum + "\"\n";
-          out += "  signature: \"ed25519:" + sig + "\"\n";
-          out += "  signed_at: \"" + now + "\"\n";
-          out += "  signed_by: \"hub.skrptiq.ai\"\n";
-          out += "\ntrust:\n";
-          out += "  tier: \"" + tier + "\"\n";
-          out += "  reviewed: true\n";
-          out += "  reviewed_at: \"" + now + "\"\n";
-          writeFileSync(join(dir, "skrptiq.yaml"), out);
-          console.log("Signed: sha256:" + checksum.slice(0, 16) + "...");
-          '
-          rm /tmp/signing.key
+          SIGNING_KEY: ${{ secrets.SIGNING_PRIVATE_KEY }}
+        run: skrptiq sign -key-env SIGNING_KEY .
 
       - name: Extract release notes
         id: notes
