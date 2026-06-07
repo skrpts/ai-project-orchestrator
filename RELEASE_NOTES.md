@@ -1,5 +1,8 @@
 # Release Notes
 
+## v1.0.9
+GH#645 Row 3b — migrate to K-037 dep-referenced schema. Strip 2 inline shared-content files and declare 2 hub-shared deps (UUID id + slug name + version + checksum from `gen-dep-checksums.mjs`). Internal slug references rewritten for E2 rename/mirror-drop pair(s): generate-briefing→agent-session-briefing. Closes pre-Step-3 inline-vendoring for this bundle.
+
 ## v1.0.8
 Wave 2: re-signed with canonical engine signing pipeline.
 

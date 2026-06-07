@@ -76,7 +76,7 @@ execution:
       triage_output: "{{steps.triage-decision.output}}"
       push_review_output: "{{steps.push-review.output}}"
   - skill: "briefing-generation"
-    prompt: "generate-briefing"
+    prompt: "agent-session-briefing"
     step_type: "generation"
     context:
       push_review_output: "{{steps.push-review.output}}"
@@ -160,7 +160,7 @@ Executes the triage decisions: posts comments with commit hashes, closes resolve
 
 ### Step 7: Briefing Generation (generation)
 
-**Skill:** briefing-generation | **Prompt:** generate-briefing
+**Skill:** briefing-generation | **Prompt:** agent-session-briefing
 
 Produces a fresh BRIEFING.md for the affected repo, incorporating new priorities from the triage, completed work from the push, and cross-repo context from the drift check.
 

@@ -33,9 +33,19 @@ jobs:
 
       - name: Extract version and slug
         id: meta
+        # `slug` is the GitHub repo name and is used wherever the release
+        # asset is referenced (zip naming, release URL).
+        # `db_slug` strips the `hub-shared-` prefix (shared objects only;
+        # consumer skrpts have no prefix and are unchanged) and is used for
+        # Hub API lookups, which key on the catalogue slug — distinct from
+        # the GitHub repo name per the three-id model in publish-skrpt.mjs.
+        # Without this split, the API lookups for shared objects 404,
+        # silently skipping security-report and version registration.
         run: |
+          REPO_NAME=$(basename "$GITHUB_REPOSITORY")
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          echo "slug=$(basename "$GITHUB_REPOSITORY")" >> "$GITHUB_OUTPUT"
+          echo "slug=${REPO_NAME}" >> "$GITHUB_OUTPUT"
+          echo "db_slug=${REPO_NAME#hub-shared-}" >> "$GITHUB_OUTPUT"
 
       # Always use the latest CLI release — no version pin.
       # Engine validation rules change frequently; a stale binary
@@ -118,8 +128,56 @@ jobs:
           console.log("Security block written: " + scan.status);
           '
 
+      - name: Verify declared dependencies (GH#612)
+        # Per SKRPT-INTEGRATION v1.2 §2.0.1 + BUNDLE-INTEGRITY v1.0.5 §6.1:
+        # If skrptiq.yaml declares dependencies, verify each against the Hub
+        # catalogue. Reject on checksum mismatch (Build-for-reliability).
+        # No-op for skrpts without dependencies (backwards-compatible).
+        #
+        # D1: This is the interim manual verification path. When skrptiq
+        # verify-composed ships (GH#613), this step is replaced with the CLI
+        # command in the SAME PR — no two-paths drift.
+        # D4: Script lives in scripts/verify-deps.mjs (tracked, testable).
+        #
+        # PR#1 R3 — `?ref=main` (NOT a pinned SHA) is deliberate.
+        #   Trade-off: pinning to a SHA would require every consumer skrpt
+        #   workflow to be reissued whenever verify-deps.mjs changes
+        #   (e.g. a security fix). The script's lifetime is short — it is
+        #   deleted in the same PR that lands GH#613 (CLI verify-composed),
+        #   per D1. For that window, fetching `main` keeps the gate fresh
+        #   without per-consumer republishes. Risk: a bad change on Hub
+        #   `main` would propagate to every CI run until reverted; the
+        #   repo is private with restricted contributor access, which we
+        #   accept as the mitigation. If that risk profile changes (public
+        #   contributor surface, longer lifetime), pin to a SHA.
+        # PR#1 R4 — SCANNER_REPO_TOKEN is necessary, NOT vestigial.
+        #   skrptiq/skrptiq-hub is a PRIVATE repo. raw.githubusercontent.com
+        #   serves private repo content only with auth. The
+        #   `?ref=main` content endpoint here REQUIRES the bearer token.
+        #   Do not strip the Authorization header on the assumption the
+        #   token is unused.
+        env:
+          HUB_API_URL: https://hub.skrptiq.ai
+          SCANNER_REPO_TOKEN: ${{ secrets.SCANNER_REPO_TOKEN }}
+        run: |
+          # Fetch verify-deps.mjs from Hub repo (same pattern as scanner fetch).
+          curl -sf \
+            -H "Authorization: Bearer ${SCANNER_REPO_TOKEN}" \
+            -H "Accept: application/vnd.github.raw+json" \
+            "https://api.github.com/repos/skrptiq/skrptiq-hub/contents/scripts/verify-deps.mjs?ref=main" \
+            -o /tmp/verify-deps.mjs
+
+          # Install the `yaml` package into a sibling directory; verify-deps.mjs
+          # resolves it via createRequire('/tmp/verify-deps-deps/'). Isolated
+          # from the consumer repo's node_modules to avoid lockfile churn.
+          # PR#1 R2: real YAML parser (was regex; broke on multi-line / quoted-colon shapes).
+          mkdir -p /tmp/verify-deps-deps
+          (cd /tmp/verify-deps-deps && npm init -y >/dev/null && npm install --silent --no-audit --no-fund yaml@^2)
+
+          node /tmp/verify-deps.mjs skrptiq.yaml --hub-url="${HUB_API_URL}"
+
       - name: Sign bundle
-        # Per BUNDLE-INTEGRITY-CONTRACT v1.0.3 §4.3-§4.4:
+        # Per BUNDLE-INTEGRITY-CONTRACT v1.0.5 §4.3-§4.4:
         # Single canonical invocation. No inline signing logic.
         # Engine's SignBundle handles file collection, manifest strip,
         # checksum, signature payload, and manifest update.
@@ -187,16 +245,28 @@ jobs:
           SCANNER_API_KEY: ${{ secrets.SCANNER_API_KEY }}
           HUB_API_URL: https://hub.skrptiq.ai
         run: |
-          SLUG="${{ steps.meta.outputs.slug }}"
+          SLUG="${{ steps.meta.outputs.db_slug }}"
           VERSION="${{ steps.meta.outputs.version }}"
 
-          # Look up skrpt UUID from Hub
-          SKRPT_DATA=$(curl -sf "${HUB_API_URL}/api/skrpts/${SLUG}" 2>/dev/null || echo '{}')
-          SKRPT_ID=$(echo "$SKRPT_DATA" | node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf-8'));console.log(d.skrpt?.id||'')}catch{console.log('')}")
+          # ── FAIL LOUD on lookup failure (build-for-reliability) ──
+          # Workflow success implies the catalogue row was written. Silent
+          # skip violates that contract. K-037 + Action 6 (`0bcc5ae0`)
+          # make the signed bundle's top-level `manifest.id` equal to the
+          # D1 catalogue row's `id` by construction — they are the same
+          # UUID. So we read SKRPT_ID directly from the signed yaml
+          # rather than calling /api/skrpts/<slug>, which:
+          #   - 404s for shared-objects (Row 4a re-applied the
+          #     entry_type='skrpt' filter), and
+          #   - is unavailable until after this workflow's POST to
+          #     /api/skrpts/by-id/.../versions for net-new versions.
+          # The local extraction is K-037-canonical and avoids both.
+          # If the manifest is malformed (no top-level `id:`), the
+          # publish itself is broken; fail the workflow loudly.
+          SKRPT_ID=$(grep -E '^id: ' skrptiq.yaml | head -1 | sed -E 's/^id: *"?([^"]+)"?$/\1/')
 
           if [ -z "$SKRPT_ID" ]; then
-            echo "::warning::Could not look up skrpt ID from Hub — skipping report submission"
-            exit 0
+            echo "::error::Could not extract manifest.id from signed skrptiq.yaml for slug='${SLUG}' — refusing to skip security report submission"
+            exit 1
           fi
 
           # Build and POST report
@@ -211,9 +281,16 @@ jobs:
             -H "x-scanner-api-key: ${SCANNER_API_KEY}" \
             -d "$PAYLOAD" 2>/dev/null || echo "000")
 
+          # 409 is the idempotent re-publish case (same version + report
+          # already on file) — keep this soft. Do NOT tighten 409 into an
+          # error; it would break the legitimate re-publish path. Anything
+          # else that isn't 201 fails the workflow.
           if [ "$HTTP_CODE" = "201" ]; then echo "Security report submitted (HTTP 201)"
-          elif [ "$HTTP_CODE" = "409" ]; then echo "Report already exists (HTTP 409)"
-          else echo "::warning::Failed to submit report (HTTP ${HTTP_CODE})"; fi
+          elif [ "$HTTP_CODE" = "409" ]; then echo "Report already exists (HTTP 409 — idempotent re-publish, allowed)"
+          else
+            echo "::error::Security report POST failed for ${SLUG}@${VERSION} (HTTP ${HTTP_CODE}) — refusing to mark workflow green" >&2
+            exit 1
+          fi
 
       - name: Register version with Hub API
         if: always() && steps.scan.outcome == 'success'
@@ -221,23 +298,41 @@ jobs:
           SCANNER_API_KEY: ${{ secrets.SCANNER_API_KEY }}
           HUB_API_URL: https://hub.skrptiq.ai
         run: |
-          SLUG="${{ steps.meta.outputs.slug }}"
+          SLUG="${{ steps.meta.outputs.db_slug }}"
           VERSION="${{ steps.meta.outputs.version }}"
 
-          # Look up skrpt UUID from Hub
-          SKRPT_DATA=$(curl -sf "${HUB_API_URL}/api/skrpts/${SLUG}" 2>/dev/null || echo '{}')
-          SKRPT_ID=$(echo "$SKRPT_DATA" | node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf-8'));console.log(d.skrpt?.id||'')}catch{console.log('')}")
+          # FAIL LOUD on lookup failure — same rationale + same K-037
+          # local-extraction approach as the security-report step above.
+          # See that comment block for the full reasoning.
+          SKRPT_ID=$(grep -E '^id: ' skrptiq.yaml | head -1 | sed -E 's/^id: *"?([^"]+)"?$/\1/')
 
           if [ -z "$SKRPT_ID" ]; then
-            echo "::warning::Could not look up skrpt ID — skipping version registration"
-            exit 0
+            echo "::error::Could not extract manifest.id from signed skrptiq.yaml for slug='${SLUG}' — refusing to skip version registration"
+            exit 1
           fi
 
-          # Extract content hash from the signed manifest's integrity block
+          # Extract content hash from the signed manifest's integrity block.
+          #
+          # ANCHORED on the `integrity:` block (NOT the first `checksum:` in
+          # the manifest). Pre-GH#625 dep-referenced consumers had only one
+          # `checksum:` occurrence (inside integrity), so the unanchored
+          # regex worked by accident. After Step 3 introduces a
+          # `dependencies:` block, the manifest has 1+N `checksum:` entries
+          # (one per dep + one in integrity), and the unanchored
+          # `match.match(/checksum:.../)` returns dep[0]'s checksum
+          # alphabetically — NOT the bundle's own integrity checksum.
+          # Surfaced live on roadmap-generation-flow v1.1.28: contentHash
+          # in D1 was set to analyse-stakeholders' dep checksum, not the
+          # bundle's. Fix-forward via v1.1.29 with this regex change in
+          # the same wave.
+          #
+          # The CLI signer may emit `checksum: sha256:abc…` (unquoted) or
+          # `checksum: "sha256:abc…"` (quoted) depending on version; both
+          # accepted under the integrity-anchor.
           CONTENT_HASH=$(node -e "
             const m = require('fs').readFileSync('skrptiq.yaml','utf-8');
-            const match = m.match(/checksum:\\s*\"sha256:([a-f0-9]+)\"/);
-            console.log(match ? match[1] : '');
+            const intMatch = m.match(/integrity:\\s*\\n(?:\\s+\\w+:[^\\n]*\\n)*\\s+checksum:\\s*\"?sha256:([a-f0-9]+)\"?/);
+            console.log(intMatch ? intMatch[1] : '');
           ")
 
           PAYLOAD=$(node -e "
@@ -256,6 +351,13 @@ jobs:
             -H "x-scanner-api-key: ${SCANNER_API_KEY}" \
             -d "$PAYLOAD" 2>/dev/null || echo "000")
 
+          # 409 is the idempotent re-publish case (same skrpt + version
+          # already registered) — keep this soft. Do NOT tighten 409 into
+          # an error; it would break the legitimate re-publish path.
+          # Anything else that isn't 201 fails the workflow.
           if [ "$HTTP_CODE" = "201" ]; then echo "Version registered (HTTP 201)"
-          elif [ "$HTTP_CODE" = "409" ]; then echo "Version already exists (HTTP 409)"
-          else echo "::warning::Failed to register version (HTTP ${HTTP_CODE})"; fi
+          elif [ "$HTTP_CODE" = "409" ]; then echo "Version already exists (HTTP 409 — idempotent re-publish, allowed)"
+          else
+            echo "::error::Version registration POST failed for ${SLUG}@${VERSION} (HTTP ${HTTP_CODE}) — refusing to mark workflow green" >&2
+            exit 1
+          fi

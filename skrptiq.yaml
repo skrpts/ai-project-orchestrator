@@ -3,7 +3,7 @@ id: "7dcf5de1-1b54-4526-86d3-43adc7c21c55"
 name: "ai-project-orchestrator"
 display_name: "AI Project Orchestrator"
 description: "Multi-agent coordination workflow: structured push reviews, cross-repo drift detection, briefing generation, and a 3-way review loop (Architect → CTO → Orchestrator)"
-version: "1.0.8"
+version: "1.0.9"
 engine: ">=0.1.0"
 
 # --- Attribution ---
@@ -22,6 +22,16 @@ tags:
   - "project-management"
 
 # --- Security & Access ---
+dependencies:
+  - id: "e48f951f-c71b-46b2-9c2d-e4efba062f74"
+    name: "agent-session-briefing"
+    version: 1.0.1
+    checksum: "sha256:28f0a9788a4e77a011ebea9300a39d1859d22262919d30eb839a04b88431d8c5"
+  - id: "fcab9536-a13e-49c9-b0c3-bb3097682e69"
+    name: "llm-service"
+    version: 1.0.1
+    checksum: "sha256:455c8bf590a9426d830bffd1a741afa058149bc29c58186c34d0d8699bea4bda"
+
 requires:
   services:
     - "llm-service"
@@ -33,10 +43,10 @@ requires:
 # --- Contents ---
 contents:
   skills: 7
-  prompts: 7
+  prompts: 6
   workflows: 1
-  services: 1
+  services: 0
   sources: 2
   documents: 2
   assets: 2
-  total: 22
+  total: 20
