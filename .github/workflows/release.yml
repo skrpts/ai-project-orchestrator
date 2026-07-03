@@ -1,13 +1,23 @@
-# Scan, sign, and release a skrpt package on version tag push.
+# Sign + release workflow for Hub-published skrpts (origin: skrptiq-hub repo).
 #
-# Pipeline: tag push → checkout → download CLI → structural scan → fetch JS scanner → security scan → write security block → sign → zip → release → POST report
+# Pipeline: tag push → checkout → download CLI → verify deps → sign → zip → release → register version
 #
-# Structural validation: CLI (skrptiq scan) — engine's own validator, single source of truth
-# Content-quality scan: JS scanner — hardcoded secrets, PII, compliance, permissions
+# Validation is run LOCALLY by scripts/publish-skrpt.mjs before tag push
+# (structural CLI scan + JS scanner) and the security block is injected into
+# skrptiq.yaml and POSTed to /api/skrpts/by-id/<id>/security by the publisher.
+# CI no longer fetches the scanner or re-runs validation — the publish gate is
+# the canonical gate. This is correct ONLY because every commit reaching this
+# workflow originates from publish-skrpt.mjs and is therefore first-party.
+#
+# For community-submitted skrpts (future), use scripts/github-actions/caller-release.yml
+# which keeps the full Download-CLI + Structural + JS-scan gate in CI.
 #
 # Requires org-level secrets:
-#   SIGNING_PRIVATE_KEY  — Ed25519 PEM for signing
-#   SCANNER_API_KEY      — API key for posting security reports to Hub
+#   SIGNING_PRIVATE_KEY       — Ed25519 PEM for signing
+#   SCANNER_API_KEY           — API key for posting version registration to Hub
+#   PIPELINE_APP_PRIVATE_KEY  — org-bot App private key; mints a short-lived read-only token for private skrptiq-hub
+# Requires org-level variables:
+#   PIPELINE_APP_ID           — org-bot App id (4071698)
 
 name: Release
 
@@ -40,17 +50,16 @@ jobs:
         # Hub API lookups, which key on the catalogue slug — distinct from
         # the GitHub repo name per the three-id model in publish-skrpt.mjs.
         # Without this split, the API lookups for shared objects 404,
-        # silently skipping security-report and version registration.
+        # silently skipping version registration.
         run: |
           REPO_NAME=$(basename "$GITHUB_REPOSITORY")
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           echo "slug=${REPO_NAME}" >> "$GITHUB_OUTPUT"
           echo "db_slug=${REPO_NAME#hub-shared-}" >> "$GITHUB_OUTPUT"
 
-      # Always use the latest CLI release — no version pin.
-      # Engine validation rules change frequently; a stale binary
-      # means the per-skrpt CI gate silently passes broken content.
-      - name: Download CLI (structural validation)
+      # CLI is required for the `skrptiq sign` step below. No scan use here —
+      # the publish-skrpt.mjs local gate is the canonical scan path.
+      - name: Download CLI (signing)
         run: |
           LATEST_URL=$(curl -sfL -o /dev/null -w '%{url_effective}' https://github.com/skrptiq/skrptiq-cli/releases/latest)
           LATEST_TAG=$(basename "$LATEST_URL")
@@ -58,119 +67,35 @@ jobs:
           chmod +x /usr/local/bin/skrptiq
           echo "Using CLI ${LATEST_TAG}"
 
-      - name: Structural validation (CLI)
-        # First-party publish policy: any engine finding blocks — errors and warnings alike.
-        run: |
-          SCAN_OUTPUT=$(skrptiq scan . 2>&1)
-          echo "$SCAN_OUTPUT"
-          if echo "$SCAN_OUTPUT" | grep -qE "(ERROR|WARNING)"; then
-            echo "::error::Structural validation failed — first-party publish requires zero findings (errors AND warnings)"
-            exit 1
-          fi
-          echo "Structural validation passed"
-
-      - name: Fetch content-quality scanner from Hub repo
-        env:
-          SCANNER_REPO_TOKEN: ${{ secrets.SCANNER_REPO_TOKEN }}
-        run: |
-          curl -sf \
-            -H "Authorization: Bearer ${SCANNER_REPO_TOKEN}" \
-            -H "Accept: application/vnd.github.raw+json" \
-            "https://api.github.com/repos/skrptiq/skrptiq-hub/contents/scripts/scanning/scan-skrpt.mjs?ref=main" \
-            -o /tmp/scan-skrpt.mjs
-          echo "Fetched content-quality scanner"
-
-      - name: Content-quality scan (JS scanner — security pass)
-        id: scan
-        run: |
-          # Run the JS scanner for security/content-quality checks
-          node /tmp/scan-skrpt.mjs . --json > /tmp/scan-result.json 2>&1 || true
-
-          # Display security results
-          node -e '
-          const r = JSON.parse(require("fs").readFileSync("/tmp/scan-result.json","utf-8"));
-          const secStatus = r.summary?.undeclared?.length > 0 ? "WARN" : r.findings?.some(f => f.severity === "fail") ? "FAIL" : "PASS";
-          console.log("Security: " + secStatus);
-          if (r.summary?.undeclared) r.summary.undeclared.forEach(u => console.log("  " + u));
-          if (r.summary?.warnings) r.summary.warnings.forEach(w => console.log("  " + w));
-          console.log("Overall: " + r.slug + " — " + r.status.toUpperCase());
-          if (r.status === "fail") {
-            if (r.summary?.warnings) r.summary.warnings.forEach(w => console.log("::error::" + w));
-            process.exit(1);
-          }
-          '
-
-          STATUS=$(node -e "console.log(JSON.parse(require('fs').readFileSync('/tmp/scan-result.json','utf-8')).status)")
-          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
-
-      - name: Write security block into manifest
-        run: |
-          node -e '
-          const { readFileSync, writeFileSync } = require("node:fs");
-          const scan = JSON.parse(readFileSync("/tmp/scan-result.json", "utf-8"));
-          const now = new Date().toISOString();
-          let manifest = readFileSync("skrptiq.yaml", "utf-8");
-          manifest = manifest.replace(/\n*security:[\s\S]*?(?=\n[a-z]|\n*$)/, "").trimEnd() + "\n";
-          let sec = "\nsecurity:\n";
-          sec += "  status: \"" + scan.status + "\"\n";
-          sec += "  scanned_at: \"" + now + "\"\n";
-          sec += "  scanner_version: \"" + scan.scanner_version + "\"\n";
-          sec += "  syntactic: \"" + scan.summary.syntactic.status + "\"\n";
-          sec += "  structural: \"" + scan.summary.structural.status + "\"\n";
-          sec += "  detected:\n";
-          sec += "    services: [" + (scan.summary.detected.services||[]).map(s=>"\""+s+"\"").join(", ") + "]\n";
-          sec += "    permissions: [" + (scan.summary.detected.permissions||[]).map(s=>"\""+s+"\"").join(", ") + "]\n";
-          sec += "    data_handling: [" + (scan.summary.detected.data_handling||[]).map(s=>"\""+s+"\"").join(", ") + "]\n";
-          sec += "  undeclared: [" + (scan.summary.undeclared||[]).map(s=>"\""+s+"\"").join(", ") + "]\n";
-          sec += "  warnings: [" + (scan.summary.warnings||[]).map(s=>"\""+s.replace(/"/g,"\\\"")+"\"").join(", ") + "]\n";
-          sec += "  report_url: \"https://hub.skrptiq.ai/skrpts/" + scan.slug + "/security\"\n";
-          writeFileSync("skrptiq.yaml", manifest + sec);
-          console.log("Security block written: " + scan.status);
-          '
+      # GH#737 — mint a short-lived org-bot App installation token, scoped
+      # read-only to the private skrptiq-hub repo, for the verify-deps fetch
+      # below. Replaces the expiry-prone personal-access-token path — nothing to rotate.
+      - name: Mint Hub-read token (org-bot App)
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          owner: skrptiq
+          repositories: skrptiq-hub
 
       - name: Verify declared dependencies (GH#612)
         # Per SKRPT-INTEGRATION v1.2 §2.0.1 + BUNDLE-INTEGRITY v1.0.5 §6.1:
         # If skrptiq.yaml declares dependencies, verify each against the Hub
         # catalogue. Reject on checksum mismatch (Build-for-reliability).
         # No-op for skrpts without dependencies (backwards-compatible).
-        #
-        # D1: This is the interim manual verification path. When skrptiq
-        # verify-composed ships (GH#613), this step is replaced with the CLI
-        # command in the SAME PR — no two-paths drift.
-        # D4: Script lives in scripts/verify-deps.mjs (tracked, testable).
-        #
-        # PR#1 R3 — `?ref=main` (NOT a pinned SHA) is deliberate.
-        #   Trade-off: pinning to a SHA would require every consumer skrpt
-        #   workflow to be reissued whenever verify-deps.mjs changes
-        #   (e.g. a security fix). The script's lifetime is short — it is
-        #   deleted in the same PR that lands GH#613 (CLI verify-composed),
-        #   per D1. For that window, fetching `main` keeps the gate fresh
-        #   without per-consumer republishes. Risk: a bad change on Hub
-        #   `main` would propagate to every CI run until reverted; the
-        #   repo is private with restricted contributor access, which we
-        #   accept as the mitigation. If that risk profile changes (public
-        #   contributor surface, longer lifetime), pin to a SHA.
-        # PR#1 R4 — SCANNER_REPO_TOKEN is necessary, NOT vestigial.
-        #   skrptiq/skrptiq-hub is a PRIVATE repo. raw.githubusercontent.com
-        #   serves private repo content only with auth. The
-        #   `?ref=main` content endpoint here REQUIRES the bearer token.
-        #   Do not strip the Authorization header on the assumption the
-        #   token is unused.
+        # GH#737 — auth via the org-bot App token minted above (read-only,
+        # private skrptiq-hub); the ?ref=main content endpoint requires it.
         env:
           HUB_API_URL: https://hub.skrptiq.ai
-          SCANNER_REPO_TOKEN: ${{ secrets.SCANNER_REPO_TOKEN }}
+          HUB_READ_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          # Fetch verify-deps.mjs from Hub repo (same pattern as scanner fetch).
           curl -sf \
-            -H "Authorization: Bearer ${SCANNER_REPO_TOKEN}" \
+            -H "Authorization: Bearer ${HUB_READ_TOKEN}" \
             -H "Accept: application/vnd.github.raw+json" \
             "https://api.github.com/repos/skrptiq/skrptiq-hub/contents/scripts/verify-deps.mjs?ref=main" \
             -o /tmp/verify-deps.mjs
 
-          # Install the `yaml` package into a sibling directory; verify-deps.mjs
-          # resolves it via createRequire('/tmp/verify-deps-deps/'). Isolated
-          # from the consumer repo's node_modules to avoid lockfile churn.
-          # PR#1 R2: real YAML parser (was regex; broke on multi-line / quoted-colon shapes).
           mkdir -p /tmp/verify-deps-deps
           (cd /tmp/verify-deps-deps && npm init -y >/dev/null && npm install --silent --no-audit --no-fund yaml@^2)
 
@@ -210,17 +135,14 @@ jobs:
             echo "::warning::No release notes found for v${VERSION}"
           fi
 
-      - name: Enforce release notes for major/minor
+      - name: Enforce release notes (all versions — GH#679 / K-040)
         if: steps.notes.outputs.has_notes == 'false'
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
-          PATCH=$(echo "$VERSION" | cut -d. -f3)
-          if [ "$PATCH" = "0" ]; then
-            echo "::error::Release notes required for major/minor version v${VERSION}. Add a ## v${VERSION} section to RELEASE_NOTES.md"
-            exit 1
-          else
-            echo "::warning::No release notes for patch v${VERSION} — continuing with placeholder"
-          fi
+          # Reject-not-warn: patch, minor and major alike. No placeholder
+          # fallback — a missing section is a hard fail, never a fake string.
+          echo "::error::Release notes required for v${VERSION}. Add a '## v${VERSION}' section to RELEASE_NOTES.md describing what changed in this version."
+          exit 1
 
       - name: Create release zip
         run: |
@@ -236,11 +158,12 @@ jobs:
           name: v${{ steps.meta.outputs.version }}
           tag_name: ${{ github.ref_name }}
           body_path: /tmp/release-notes.txt
-          generate_release_notes: ${{ steps.notes.outputs.has_notes == 'false' }}
+          # has_notes is always 'true' past the "Enforce release notes" gate
+          # (GH#679) — auto-generation branch is unreachable, kept false.
+          generate_release_notes: false
           files: ${{ env.zip_name }}
 
-      - name: Post security report to Hub API
-        if: always() && steps.scan.outcome == 'success'
+      - name: Register version with Hub API
         env:
           SCANNER_API_KEY: ${{ secrets.SCANNER_API_KEY }}
           HUB_API_URL: https://hub.skrptiq.ai
@@ -249,61 +172,11 @@ jobs:
           VERSION="${{ steps.meta.outputs.version }}"
 
           # ── FAIL LOUD on lookup failure (build-for-reliability) ──
-          # Workflow success implies the catalogue row was written. Silent
-          # skip violates that contract. K-037 + Action 6 (`0bcc5ae0`)
-          # make the signed bundle's top-level `manifest.id` equal to the
-          # D1 catalogue row's `id` by construction — they are the same
-          # UUID. So we read SKRPT_ID directly from the signed yaml
-          # rather than calling /api/skrpts/<slug>, which:
-          #   - 404s for shared-objects (Row 4a re-applied the
-          #     entry_type='skrpt' filter), and
-          #   - is unavailable until after this workflow's POST to
-          #     /api/skrpts/by-id/.../versions for net-new versions.
-          # The local extraction is K-037-canonical and avoids both.
-          # If the manifest is malformed (no top-level `id:`), the
-          # publish itself is broken; fail the workflow loudly.
-          SKRPT_ID=$(grep -E '^id: ' skrptiq.yaml | head -1 | sed -E 's/^id: *"?([^"]+)"?$/\1/')
-
-          if [ -z "$SKRPT_ID" ]; then
-            echo "::error::Could not extract manifest.id from signed skrptiq.yaml for slug='${SLUG}' — refusing to skip security report submission"
-            exit 1
-          fi
-
-          # Build and POST report
-          PAYLOAD=$(node -e "
-            const s=JSON.parse(require('fs').readFileSync('/tmp/scan-result.json','utf-8'));
-            console.log(JSON.stringify({version:'${VERSION}',status:s.status,scanner_version:s.scanner_version,summary:s.summary,findings:s.findings}));
-          ")
-
-          HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
-            -X POST "${HUB_API_URL}/api/skrpts/by-id/${SKRPT_ID}/security" \
-            -H "Content-Type: application/json" \
-            -H "x-scanner-api-key: ${SCANNER_API_KEY}" \
-            -d "$PAYLOAD" 2>/dev/null || echo "000")
-
-          # 409 is the idempotent re-publish case (same version + report
-          # already on file) — keep this soft. Do NOT tighten 409 into an
-          # error; it would break the legitimate re-publish path. Anything
-          # else that isn't 201 fails the workflow.
-          if [ "$HTTP_CODE" = "201" ]; then echo "Security report submitted (HTTP 201)"
-          elif [ "$HTTP_CODE" = "409" ]; then echo "Report already exists (HTTP 409 — idempotent re-publish, allowed)"
-          else
-            echo "::error::Security report POST failed for ${SLUG}@${VERSION} (HTTP ${HTTP_CODE}) — refusing to mark workflow green" >&2
-            exit 1
-          fi
-
-      - name: Register version with Hub API
-        if: always() && steps.scan.outcome == 'success'
-        env:
-          SCANNER_API_KEY: ${{ secrets.SCANNER_API_KEY }}
-          HUB_API_URL: https://hub.skrptiq.ai
-        run: |
-          SLUG="${{ steps.meta.outputs.db_slug }}"
-          VERSION="${{ steps.meta.outputs.version }}"
-
-          # FAIL LOUD on lookup failure — same rationale + same K-037
-          # local-extraction approach as the security-report step above.
-          # See that comment block for the full reasoning.
+          # K-037 + Action 6 (`0bcc5ae0`) make the signed bundle's top-level
+          # `manifest.id` equal to the D1 catalogue row's `id` by construction.
+          # Read SKRPT_ID directly from the signed yaml — avoids the 404 on
+          # /api/skrpts/<slug> for shared-objects + the bootstrap chicken/egg
+          # for net-new versions.
           SKRPT_ID=$(grep -E '^id: ' skrptiq.yaml | head -1 | sed -E 's/^id: *"?([^"]+)"?$/\1/')
 
           if [ -z "$SKRPT_ID" ]; then
@@ -312,35 +185,24 @@ jobs:
           fi
 
           # Extract content hash from the signed manifest's integrity block.
-          #
           # ANCHORED on the `integrity:` block (NOT the first `checksum:` in
-          # the manifest). Pre-GH#625 dep-referenced consumers had only one
-          # `checksum:` occurrence (inside integrity), so the unanchored
-          # regex worked by accident. After Step 3 introduces a
-          # `dependencies:` block, the manifest has 1+N `checksum:` entries
-          # (one per dep + one in integrity), and the unanchored
-          # `match.match(/checksum:.../)` returns dep[0]'s checksum
-          # alphabetically — NOT the bundle's own integrity checksum.
-          # Surfaced live on roadmap-generation-flow v1.1.28: contentHash
-          # in D1 was set to analyse-stakeholders' dep checksum, not the
-          # bundle's. Fix-forward via v1.1.29 with this regex change in
-          # the same wave.
-          #
-          # The CLI signer may emit `checksum: sha256:abc…` (unquoted) or
-          # `checksum: "sha256:abc…"` (quoted) depending on version; both
-          # accepted under the integrity-anchor.
+          # the manifest) — post-GH#625 dep-referenced consumers have 1+N
+          # `checksum:` entries (one per dep + one in integrity).
           CONTENT_HASH=$(node -e "
             const m = require('fs').readFileSync('skrptiq.yaml','utf-8');
             const intMatch = m.match(/integrity:\\s*\\n(?:\\s+\\w+:[^\\n]*\\n)*\\s+checksum:\\s*\"?sha256:([a-f0-9]+)\"?/);
             console.log(intMatch ? intMatch[1] : '');
           ")
 
+          # GH#679 / K-040 — no placeholder fallback. The Enforce-release-notes
+          # step above hard-fails the job when notes are absent, so the value
+          # read here is guaranteed real; the API rejects placeholders too.
           PAYLOAD=$(node -e "
             const notes = require('fs').readFileSync('/tmp/release-notes.txt','utf-8').trim();
             console.log(JSON.stringify({
               version:'${VERSION}',
               git_commit:'${GITHUB_SHA}',
-              release_notes: notes || 'Release notes unavailable for this version.',
+              release_notes: notes,
               content_hash:'${CONTENT_HASH}'
             }));
           ")
@@ -351,10 +213,7 @@ jobs:
             -H "x-scanner-api-key: ${SCANNER_API_KEY}" \
             -d "$PAYLOAD" 2>/dev/null || echo "000")
 
-          # 409 is the idempotent re-publish case (same skrpt + version
-          # already registered) — keep this soft. Do NOT tighten 409 into
-          # an error; it would break the legitimate re-publish path.
-          # Anything else that isn't 201 fails the workflow.
+          # 409 is the idempotent re-publish case — keep this soft.
           if [ "$HTTP_CODE" = "201" ]; then echo "Version registered (HTTP 201)"
           elif [ "$HTTP_CODE" = "409" ]; then echo "Version already exists (HTTP 409 — idempotent re-publish, allowed)"
           else

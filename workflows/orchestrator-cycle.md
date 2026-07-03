@@ -45,14 +45,17 @@ execution:
   - skill: "push-review"
     prompt: "review-push"
     step_type: "synthesis"
+    output: { name: "push_review", type: "text" }
   - skill: "schema-drift-check"
     prompt: "check-schema-drift"
     step_type: "review"
+    output: { name: "drift_check", type: "text" }
     context:
       push_review_output: "{{steps.push-review.output}}"
   - skill: "architect-review"
     prompt: "architect-findings"
     step_type: "review"
+    output: { name: "architect_findings", type: "text" }
     context:
       push_review_output: "{{steps.push-review.output}}"
       drift_check_output: "{{steps.schema-drift-check.output}}"
@@ -60,11 +63,13 @@ execution:
   - skill: "cto-response"
     prompt: "cto-pressure-test"
     step_type: "validation"
+    output: { name: "cto_response", type: "text" }
     context:
       architect_findings_output: "{{steps.architect-review.output}}"
   - skill: "triage-decision"
     prompt: "triage-outcomes"
     step_type: "synthesis"
+    output: { name: "triage", type: "text" }
     context:
       architect_findings_output: "{{steps.architect-review.output}}"
       cto_response_output: "{{steps.cto-response.output}}"
@@ -72,12 +77,14 @@ execution:
   - skill: "issue-management"
     prompt: "manage-issues"
     step_type: "generation"
+    output: { name: "issue_actions", type: "text" }
     context:
       triage_output: "{{steps.triage-decision.output}}"
       push_review_output: "{{steps.push-review.output}}"
   - skill: "briefing-generation"
     prompt: "agent-session-briefing"
     step_type: "generation"
+    output: { name: "briefing", type: "text" }
     context:
       push_review_output: "{{steps.push-review.output}}"
       drift_check_output: "{{steps.schema-drift-check.output}}"
