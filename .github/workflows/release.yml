@@ -3,21 +3,23 @@
 # Pipeline: tag push → checkout → download CLI → verify deps → sign → zip → release → register version
 #
 # Validation is run LOCALLY by scripts/publish-skrpt.mjs before tag push
-# (structural CLI scan + JS scanner) and the security block is injected into
-# skrptiq.yaml and POSTed to /api/skrpts/by-id/<id>/security by the publisher.
-# CI no longer fetches the scanner or re-runs validation — the publish gate is
-# the canonical gate. This is correct ONLY because every commit reaching this
-# workflow originates from publish-skrpt.mjs and is therefore first-party.
+# (structural CLI scan + JS scanner). The scan GATE stays local (the publish
+# gate is the canonical gate); publish-skrpt.mjs injects the security block into
+# skrptiq.yaml AND writes security-report.json into the bundle. CI (GH#738) mints
+# a GitHub OIDC token and POSTs both the version registration and the security
+# report — the network writes are OIDC-authed here so no shared secret is needed.
+# This is correct ONLY because every commit reaching this workflow originates
+# from publish-skrpt.mjs and is therefore first-party.
 #
 # For community-submitted skrpts (future), use scripts/github-actions/caller-release.yml
 # which keeps the full Download-CLI + Structural + JS-scan gate in CI.
 #
 # Requires org-level secrets:
 #   SIGNING_PRIVATE_KEY       — Ed25519 PEM for signing
-#   SCANNER_API_KEY           — API key for posting version registration to Hub
 #   PIPELINE_APP_PRIVATE_KEY  — org-bot App private key; mints a short-lived read-only token for private skrptiq-hub
 # Requires org-level variables:
 #   PIPELINE_APP_ID           — org-bot App id (4071698)
+# Hub API auth: GitHub OIDC (id-token: write) — no SCANNER_API_KEY (GH#738).
 
 name: Release
 
@@ -31,6 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write   # GH#738 — mint the GitHub OIDC token for Hub API auth
 
     steps:
       - name: Checkout
@@ -163,11 +166,14 @@ jobs:
           generate_release_notes: false
           files: ${{ env.zip_name }}
 
-      - name: Register version with Hub API
+      - name: Register version + post security report to Hub API
         env:
-          SCANNER_API_KEY: ${{ secrets.SCANNER_API_KEY }}
           HUB_API_URL: https://hub.skrptiq.ai
         run: |
+          # GH#738 — mint a short-lived GitHub OIDC token (audience hub.skrptiq.ai)
+          # for Hub API auth, replacing the SCANNER_API_KEY shared secret.
+          HUB_OIDC_TOKEN=$(curl -sf -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hub.skrptiq.ai" | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).value')
+          echo "::add-mask::${HUB_OIDC_TOKEN}"
           SLUG="${{ steps.meta.outputs.db_slug }}"
           VERSION="${{ steps.meta.outputs.version }}"
 
@@ -210,7 +216,7 @@ jobs:
           HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
             -X POST "${HUB_API_URL}/api/skrpts/by-id/${SKRPT_ID}/versions" \
             -H "Content-Type: application/json" \
-            -H "x-scanner-api-key: ${SCANNER_API_KEY}" \
+            -H "Authorization: Bearer ${HUB_OIDC_TOKEN}" \
             -d "$PAYLOAD" 2>/dev/null || echo "000")
 
           # 409 is the idempotent re-publish case — keep this soft.
@@ -219,4 +225,21 @@ jobs:
           else
             echo "::error::Version registration POST failed for ${SLUG}@${VERSION} (HTTP ${HTTP_CODE}) — refusing to mark workflow green" >&2
             exit 1
+          fi
+
+          # GH#738 — POST the security report. Relocated from publish-skrpt.mjs
+          # (which now writes security-report.json into the bundle so the OIDC
+          # token can be minted here in CI). The local scan GATE stays in
+          # publish-skrpt.mjs; only this network write moved. Soft (supplementary).
+          if [ -f security-report.json ]; then
+            SEC_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
+              -X POST "${HUB_API_URL}/api/skrpts/by-id/${SKRPT_ID}/security" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${HUB_OIDC_TOKEN}" \
+              -d @security-report.json 2>/dev/null || echo "000")
+            if [ "$SEC_CODE" = "201" ]; then echo "Security report submitted (HTTP 201)"
+            elif [ "$SEC_CODE" = "409" ]; then echo "Security report already exists (HTTP 409 — idempotent)"
+            else echo "::warning::Security report POST returned HTTP ${SEC_CODE}"; fi
+          else
+            echo "::warning::security-report.json not found in bundle — skipping security POST"
           fi
