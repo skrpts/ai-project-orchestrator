@@ -32,7 +32,7 @@ Identify shared contracts by scanning for:
 
 - **Type drift** — a field was added, removed, or changed type in one repo but not another
 - **Validation drift** — validation rules (required/optional, min/max, enum values) differ between repos
-- **Default drift** — default values for shared fields differ, causing inconsistent behaviour
+- **Default drift** — default values for shared fields differ, causing inconsistent behavior
 - **Version drift** — one repo references a newer version of a shared spec while another still uses the old one
 - **Naming drift** — the same concept uses different field names in different repos (e.g., `userId` vs `user_id`)
 
@@ -40,7 +40,7 @@ Identify shared contracts by scanning for:
 
 - **Critical** — type changes that will cause runtime errors (field removed, type changed from string to number)
 - **High** — validation differences that will cause silent data loss (stricter validation in consumer than producer)
-- **Medium** — default value differences that cause inconsistent but not broken behaviour
+- **Medium** — default value differences that cause inconsistent but not broken behavior
 - **Low** — naming inconsistencies or documentation drift
 
 ## Output Format
@@ -54,4 +54,4 @@ Returns a structured drift report with:
 
 ## Limitations
 
-This skill compares contracts based on structural analysis, not runtime behaviour. It cannot detect semantic drift where the same schema is used for different purposes in different repos. It also cannot verify that a schema change has been deployed — only that the source code has diverged.
+This skill compares contracts based on structural analysis, not runtime behavior. It cannot detect semantic drift where the same schema is used for different purposes in different repos. It also cannot verify that a schema change has been deployed — only that the source code has diverged.

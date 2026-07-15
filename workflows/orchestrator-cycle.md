@@ -63,6 +63,7 @@ execution:
   - skill: "cto-response"
     prompt: "cto-pressure-test"
     step_type: "validation"
+    gate: true
     output: { name: "cto_response", type: "text" }
     context:
       architect_findings_output: "{{steps.architect-review.output}}"
@@ -130,7 +131,7 @@ Examines the push review and drift check outputs. Produces structured findings, 
 
 **Input:** Push review output, drift check output, and (on iteration 2) the CTO's previous response.
 
-**Output:** Structured findings with review header, prioritised finding list, summary assessment, and cross-repo implications.
+**Output:** Structured findings with review header, prioritized finding list, summary assessment, and cross-repo implications.
 
 #### Step 4: CTO Response (validation, gate)
 

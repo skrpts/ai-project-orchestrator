@@ -16,7 +16,7 @@ metadata:
 
 ## Purpose
 
-Defines how briefings are constructed, prioritised, and propagated across repos. This protocol ensures that agents receive exactly the context they need — no more, no less.
+Defines how briefings are constructed, prioritized, and propagated across repos. This protocol ensures that agents receive exactly the context they need — no more, no less.
 
 ## The 140-Line Insight
 

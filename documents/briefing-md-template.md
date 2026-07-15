@@ -61,7 +61,7 @@ This template defines the structure for a repo's `BRIEFING.md` file — the sess
 
 ### Priority Queue
 
-- **Maximum 7 items.** If there are more, the orchestrator must prioritise. Agents should not face a wall of 15 tasks.
+- **Maximum 7 items.** If there are more, the orchestrator must prioritize. Agents should not face a wall of 15 tasks.
 - **Every item has a context pointer.** No exceptions. `Read: docs/` is not a pointer. `Read: src/lib/auth.ts lines 42-68` is.
 - **Every item has acceptance criteria.** "Done when: it works" is not acceptable. "Done when: the `/api/submit` endpoint returns 200 for valid payloads and 401 for missing auth headers" is.
 - **Imperative mood.** "Fix the token refresh" not "The token refresh needs fixing".

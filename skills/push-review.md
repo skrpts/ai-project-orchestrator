@@ -27,7 +27,7 @@ Analyses the full context of a git push event: the diff, commit messages, any ag
 
 ### Diff Analysis
 
-- **Files changed** — categorise by type: source code, configuration, documentation, tests, generated files.
+- **Files changed** — categorize by type: source code, configuration, documentation, tests, generated files.
 - **Change magnitude** — lines added, removed, and modified. Flag large diffs (500+ lines) that may need splitting.
 - **Cross-cutting changes** — identify changes that touch shared interfaces, schemas, or contracts. These are candidates for drift detection.
 - **New dependencies** — flag added imports, packages, or service connections that expand the project's dependency surface.
@@ -51,4 +51,4 @@ Returns a structured push review with:
 
 ## Limitations
 
-This skill analyses the push in isolation. It does not have access to the full repository history or runtime behaviour. Cross-repo impact is inferred from file patterns and naming conventions, not verified against the actual sibling repos. The schema-drift-check skill handles that verification.
+This skill analyses the push in isolation. It does not have access to the full repository history or runtime behavior. Cross-repo impact is inferred from file patterns and naming conventions, not verified against the actual sibling repos. The schema-drift-check skill handles that verification.

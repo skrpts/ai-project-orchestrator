@@ -42,7 +42,7 @@ The Architect reviews three inputs:
 2. **Drift check output** — any schema or contract divergence detected
 3. **Open issues context** — whether the changes align with assigned work or introduce scope creep
 
-### Prioritisation
+### Prioritization
 
 Findings are ordered by a composite score:
 
@@ -72,4 +72,4 @@ The CTO receives this output and pressure-tests each finding. The Architect shou
 
 ## Limitations
 
-The Architect reviews structure and patterns, not runtime behaviour. Performance findings are based on static analysis heuristics. Security findings are based on known patterns, not penetration testing.
+The Architect reviews structure and patterns, not runtime behavior. Performance findings are based on static analysis heuristics. Security findings are based on known patterns, not penetration testing.

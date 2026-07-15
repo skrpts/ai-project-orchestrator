@@ -1,5 +1,8 @@
 # Release Notes
 
+## v1.0.11
+GH#844 — migrate the gate step from node-meta (`metadata.gate: true` in the skill) to the canonical execution-entry `gate: true` on the workflow step. Single source of truth; the engine + app read the execution entry. No behaviour change — `IsGate` is identical.
+
 ## v1.0.10
 GH#745 — declare per-step `output: {name, type}` on every execution step (push_review/text, drift_check/text, architect_findings/text, cto_response/text, triage/text, issue_actions/text, briefing/text). Lights up the #744 rich flow-map. Content-only; no bindings or logic changes.
 
@@ -19,4 +22,4 @@ Bundle re-signed with canonical engine signing pipeline (Wave 2 migration).
 Signature fix — RELEASE_NOTES.md now included in integrity checksum.
 
 ## v1.0.4
-Initial catalogue release with full structural and content-quality validation. All scanner checks pass.
+Initial catalog release with full structural and content-quality validation. All scanner checks pass.

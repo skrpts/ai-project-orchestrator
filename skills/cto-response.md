@@ -13,7 +13,6 @@ metadata:
   complexity: high
   avg_tokens: 2500
   role: cto
-  gate: true
 ---
 
 ## Capability
@@ -53,7 +52,7 @@ After reviewing all findings, the CTO issues an overall verdict:
 - **Pass** — no critical or high findings remain after review. The workflow proceeds.
 - **Fail** — one or more critical/high findings are accepted or escalated. The review loop iterates: findings go back to the Architect for a revised assessment incorporating the CTO's feedback.
 
-### Iteration Behaviour
+### Iteration Behavior
 
 On the second pass (after a Fail):
 

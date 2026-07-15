@@ -25,7 +25,7 @@ Generates a concise, actionable briefing document for an agent session. The brie
 
 ### Context Budget Awareness
 
-Agents read approximately 140 lines at session start: the repo's `CLAUDE.md` (~80 lines) plus `BRIEFING.md` (~60 lines). Every line in the briefing competes for attention. The briefing must be ruthlessly prioritised.
+Agents read approximately 140 lines at session start: the repo's `CLAUDE.md` (~80 lines) plus `BRIEFING.md` (~60 lines). Every line in the briefing competes for attention. The briefing must be ruthlessly prioritized.
 
 ### Priority Queue Structure
 

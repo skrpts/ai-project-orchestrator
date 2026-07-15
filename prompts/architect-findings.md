@@ -88,13 +88,13 @@ List any findings that require action in sibling repos:
 
 1. **Evidence is mandatory** — a finding without a code snippet is not a finding. If you cannot point to specific lines, do not raise it.
 2. **Severity must be justified** — Critical means "will cause data loss, security breach, or service outage". High means "will cause bugs or degraded experience for users". Do not inflate severity.
-3. **Confidence is honest** — if you are unsure, say Medium or Low. The CTO uses confidence to prioritise their review.
+3. **Confidence is honest** — if you are unsure, say Medium or Low. The CTO uses confidence to prioritize their review.
 4. **Scope discipline** — only review changes in this push. Pre-existing issues in unchanged code are out of scope unless the push makes them worse.
 5. **No style nitpicks above Low** — naming preferences and formatting opinions are Low severity at most. The CTO will reject anything higher.
 
 ## Formatting Rules
 
 - Use British English throughout
-- Code snippets must be exact — do not paraphrase or summarise code
+- Code snippets must be exact — do not paraphrase or summarize code
 - Finding IDs must be sequential (ARCH-001, ARCH-002, etc.)
 - Keep the total output under 3000 tokens — if you have more than 15 findings, you are probably being too granular
