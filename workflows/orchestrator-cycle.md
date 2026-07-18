@@ -95,7 +95,9 @@ execution:
 
 ## Overview
 
-The Orchestrator Cycle is the core workflow for multi-agent project coordination. It runs after every push to a managed repo and produces three outputs: a review record, updated GitHub Issues, and a fresh briefing for the next agent session.
+The Orchestrator Cycle is the core workflow for multi-agent project coordination. It runs after a push to a managed repo and produces three outputs: a review record, a list of recommended GitHub Issue actions, and a fresh briefing for the next agent session.
+
+**How it sees your project:** this workflow reasons over the text you provide — a **push summary** (commits, changed files, diff stats, agent notes) and your **open-issues list** — not the live repository. It does not clone, read, or call any repo/git/GitHub API itself; think of it as an analyst working from a pasted status update. Capture the push summary with the included `push-hook-script` (a git hook that writes `git diff --stat` and commit details to an inbox for you to paste), and apply the issue actions it recommends in your own environment. Giving the workflow direct, live repo access — via an MCP or a local git/gh capability — is planned separately (see #860); today it is paste-driven by design.
 
 ## Pipeline
 
@@ -160,11 +162,11 @@ Converts the final review record into concrete actions: GitHub Issues for accept
 
 **Skill:** issue-management | **Prompt:** manage-issues
 
-Executes the triage decisions: posts comments with commit hashes, closes resolved single-repo issues, removes labels for cross-repo issues, and creates new issues.
+Turns the triage decisions into an explicit list of issue actions to take: which comments to post (with commit hashes), which resolved single-repo issues to close, which labels to remove for cross-repo issues, and which new issues to create. The workflow produces this action list; applying it to GitHub is left to the executing environment (see Setup), which needs its own Issues API access.
 
 **Input:** Triage manifest and push review context.
 
-**Output:** Action log of all issue operations performed.
+**Output:** A structured action list of the recommended issue operations.
 
 ### Step 7: Briefing Generation (generation)
 

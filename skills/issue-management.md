@@ -2,7 +2,7 @@
 type: skill
 id: issue-management
 title: Issue Management
-description: "Updates GitHub Issues: comments with commit hashes, closes single-repo issues, removes labels for cross-repo"
+description: "Determines the GitHub Issue actions to take — comments with commit hashes, closes for single-repo, label changes for cross-repo — for the executing environment to apply"
 tags: [Production, Tested, Orchestration, Issue-Management]
 connections:
   - target: llm-service
@@ -15,7 +15,7 @@ metadata:
 
 ## Capability
 
-Executes the issue lifecycle actions determined by the triage step. Handles the nuanced rules for closing issues in a multi-repo project where a single issue may span multiple repos.
+Determines the issue lifecycle actions implied by the triage step and emits them as an explicit action list for the executing environment to apply. Handles the nuanced rules for closing issues in a multi-repo project where a single issue may span multiple repos. This skill decides *what* should happen to each issue; it does not call the GitHub API itself (see the note on execution below).
 
 ## Issue Actions
 

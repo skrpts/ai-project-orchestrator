@@ -2,7 +2,7 @@
 type: skill
 id: schema-drift-check
 title: Schema Drift Check
-description: "Compares shared schemas and contracts across repos, flags divergence that could cause integration failures"
+description: "Reasons over the push summary you provide to flag likely schema/contract divergence that could cause integration failures"
 tags: [Production, Tested, Code, Quality, Orchestration]
 connections:
   - target: llm-service
@@ -15,7 +15,7 @@ metadata:
 
 ## Capability
 
-Detects when shared contracts — schemas, types, API specs, configuration formats — have diverged between repos in a multi-repo project. This is the most common source of silent integration failures in projects with independent agent sessions per repo.
+Reasons over the push summary you provide to flag where shared contracts — schemas, types, API specs, configuration formats — look likely to have diverged in a multi-repo project. Its view is limited to what the summary describes: it reads the pasted push details, not the repositories themselves, so it surfaces *candidate* drift to investigate rather than a verified cross-repo diff. This is the most common source of silent integration failures in projects with independent agent sessions per repo.
 
 ## Detection Strategy
 

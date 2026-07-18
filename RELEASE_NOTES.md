@@ -1,5 +1,8 @@
 # Release Notes
 
+## v1.0.12
+GH#858 (A3) — honest copy. The workflow is all-LLM and reasons over a pasted push summary + open-issues list; it never reads a repo or calls the GitHub API. The prior copy over-promised live-repo awareness ("cross-repo drift detection", schema-drift "compares … across repos", issue-management "Updates GitHub Issues" / "Executes"). Tightened the manifest description, the `schema-drift-check` and `issue-management` skill descriptions/capabilities, and the workflow's Overview + issue-management step so it clearly reads as *"reasons over the push summary you provide"* and *"determines the issue actions for the executing environment to apply"* — matching the skill's own existing caveat that it does not call the API. Added an explicit "How it sees your project" note pointing at the `push-hook-script` capture path and at #860 (the planned live-repo MCP / local git-gh capability). Copy only — no workflow, graph, or behaviour change.
+
 ## v1.0.11
 GH#844 — migrate the gate step from node-meta (`metadata.gate: true` in the skill) to the canonical execution-entry `gate: true` on the workflow step. Single source of truth; the engine + app read the execution entry. No behaviour change — `IsGate` is identical.
 

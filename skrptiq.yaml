@@ -2,8 +2,8 @@
 id: "7dcf5de1-1b54-4526-86d3-43adc7c21c55"
 name: "ai-project-orchestrator"
 display_name: "AI Project Orchestrator"
-description: "Multi-agent coordination workflow: structured push reviews, cross-repo drift detection, briefing generation, and a 3-way review loop (Architect → CTO → Orchestrator)"
-version: "1.0.11"
+description: "Multi-agent coordination workflow that reasons over a pasted push summary + open-issues list: structured push review, likely-drift flagging, triage + issue-action planning, and a briefing — via a 3-way review loop (Architect → CTO → Orchestrator)"
+version: "1.0.12"
 engine: ">=0.1.0"
 
 # --- Attribution ---
@@ -53,7 +53,7 @@ contents:
 
 security:
   status: "pass"
-  scanned_at: "2026-07-15T11:38:23.762Z"
+  scanned_at: "2026-07-18T13:49:29.839Z"
   scanner_version: "3.3.0"
   syntactic: "pass"
   structural: "pass"
